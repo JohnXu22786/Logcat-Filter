@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Logcat Filter</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            margin: 0;
+            padding: 10px;
+            box-sizing: border-box;
+            background-color: #f4f4f4;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column; /* Changed to column for top/bottom arrangement */
+            flex: 1;
+            gap: 15px;
+            min-height: 0;
+            max-width: 1200px; /* Max width for comfortable viewing */
+            margin: 0 auto; /* Center the container */
+            width: 100%; /* Ensure it takes available width up to max */
+        }
+
+        .optionBar {
+            padding: 8px 15px;
+            background: #fff;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .optionBar label {
+            user-select: none;
+            font-size: 0.9rem;
+        }
+
+        .panelRow {
+            display: flex;
+            flex: 1; /* Allows panels to grow and take space vertically */
+            gap: 15px;
+            min-height: 0;
+        }
+
+        .panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            background: #fff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 10px 15px;
+            background: #eee;
+            border-bottom: 1px solid #ddd;
+            font-weight: bold;
+            color: #555;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        textarea {
+            flex: 1;
+            width: 100%;
+            padding: 10px;
+            border: none;
+            font-family: 'Cascadia Mono', 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+            resize: none;
+            background: #f9f9f9;
+        }
+
+        textarea:focus {
+            outline: none;
+            box-shadow: inset 0 0 5px rgba(0, 123, 255, 0.4);
+        }
+
+        button {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: #fff;
+            cursor: pointer;
+            transition: background-color .2s ease;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        #statusMessage {
+            margin-top: 10px;
+            text-align: center;
+            font-size: .9rem;
+            color: #666;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 0; /* Remove horizontal padding on small screens if needed */
+            }
+            .panelRow {
+                flex-direction: column; /* Stack panels vertically on small screens */
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Logcat Filter</h1>
+
+    <!-- Options bar -->
+    <div class="container">
+        <div class="optionBar">
+            <strong>Filter by Severity:</strong>
+            <label><input type="checkbox" class="lvl" value="V" /> V (Verbose)</label>
+            <label><input type="checkbox" class="lvl" value="D" /> D (Debug)</label>
+            <label><input type="checkbox" class="lvl" value="I" /> I (Info)</label>
+            <label><input type="checkbox" class="lvl" value="W" checked /> W (Warning)</label>
+            <label><input type="checkbox" class="lvl" value="E" checked /> E (Error)</label>
+            <label><input type="checkbox" class="lvl" value="F" checked /> F (Fatal)</label>
+        </div>
+
+        <!-- Flexible two-panel grid -->
+        <div class="panelRow">
+            <!-- INPUT -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Input Logcat</span>
+                    <button id="processBtn">Process</button>
+                </div>
+                <textarea id="logcatInput" placeholder="Paste your logcat text here…"></textarea>
+            </div>
+            <!-- OUTPUT -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Filtered Results</span>
+                    <button id="copyBtn" disabled>Copy</button>
+                </div>
+                <textarea id="outputResult" readonly
+                          placeholder="Filtered lines appear here…"></textarea>
+            </div>
+        </div>
+
+        <div id="statusMessage">Ready.</div>
+    </div>
+
+    <script>
+        /* === Main logic === */
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputArea   = document.getElementById('logcatInput');
+            const outputArea  = document.getElementById('outputResult');
+            const statusBar   = document.getElementById('statusMessage');
+            const processBtn  = document.getElementById('processBtn');
+            const copyBtn     = document.getElementById('copyBtn');
+
+            // cache checkboxes only once
+            const cbs = [...document.querySelectorAll('.lvl')];
+
+            /* --- chunk-based processing to keep UI responsive --- */
+            processBtn.addEventListener('click', () => {
+                const raw = inputArea.value.trim();
+                if (!raw) { statusBar.textContent = 'Empty input.'; return; }
+
+                // collect selected levels
+                const wanted = new Set(cbs.filter(cb => cb.checked).map(cb => cb.value));
+                if (wanted.size === 0) { statusBar.textContent = 'Select at least one severity above.'; return; }
+
+                const lines     = raw.split('\n');
+                const results   = [];
+
+                // progress vars
+                let idx   = 0;
+                const len = lines.length;
+                // Regex to match severity level followed by a space
+                // Example: /\s(?:W|E|F)\s/
+                const chk = new RegExp('\\s(?:' + [...wanted].join('|') + ')\\s');
+
+                statusBar.textContent = 'Processing... 0%';
+                processBtn.disabled = true;
+                copyBtn.disabled    = true;
+                outputArea.value    = '';
+
+                const chunk = () => {
+                    const end = Math.min(idx + 5000, len); // Process 5000 lines at a time
+                    for (; idx < end; ++idx) {
+                        // Check if the line contains the desired severity level preceded and followed by a space
+                        // This ensures it only matches the severity level, not accidental occurrences of the letters
+                        if (chk.test(lines[idx])) {
+                            results.push(lines[idx]);
+                        }
+                    }
+                    if (idx < len) {
+                        statusBar.textContent = `Processing… ${Math.round(idx / len * 100)}%`;
+                        setTimeout(chunk, 0);        // async continuation
+                    } else {
+                        finish(results);
+                    }
+                };
+
+                chunk();
+            });
+
+            copyBtn.addEventListener('click', () => {
+                outputArea.select();
+                outputArea.setSelectionRange(0, 99999); // For mobile compatibility
+                try {
+                    document.execCommand('copy');       // Synchronously copy text (deprecated but widely supported)
+                    statusBar.textContent = 'Copied to clipboard!';
+                } catch(e) {
+                    statusBar.textContent = 'Copy failed, please copy manually.';
+                    console.error('Failed to copy text: ', e);
+                }
+                outputArea.blur(); // Deselect
+            });
+
+            function finish(found) {
+                outputArea.value = found.join('\n');
+                processBtn.disabled = false;
+                copyBtn.disabled    = found.length === 0;
+                statusBar.textContent = found.length
+                    ? `Done. ${found.length} lines matched.`
+                    : 'No matching lines found.';
+            }
+
+            // auto-focus input on load
+            inputArea.focus();
+        });
+    </script>
+</body>
+</html>
